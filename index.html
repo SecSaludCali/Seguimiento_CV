@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Cero Estigma - Moodle</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #f3f4f6; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .tab-btn.active { border-bottom: 2px solid #3b82f6; color: #3b82f6; font-weight: bold; }
+        .table-container { max-height: 400px; overflow-y: auto; }
+    </style>
+</head>
+<body class="p-8">
+
+    <div class="max-w-6xl mx-auto">
+        <div class="bg-white p-6 rounded-lg shadow-md mb-6 flex justify-between items-center border-l-4 border-blue-500">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-800">📊 Analizador de Avance Moodle</h1>
+                <p class="text-gray-500 text-sm">Carga tu reporte en Excel (.xlsx o .csv) para generar el informe automáticamente.</p>
+            </div>
+            <div>
+                <input type="file" id="fileUpload" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 transition"/>
+            </div>
+        </div>
+
+        <div id="dashboard" class="hidden">
+            
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="bg-white p-4 rounded-lg shadow border-l-4 border-gray-400">
+                    <h3 class="text-gray-500 text-sm font-semibold">Total Inscritos</h3>
+                    <p id="kpi-total" class="text-3xl font-bold text-gray-800">0</p>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow border-l-4 border-green-500">
+                    <h3 class="text-gray-500 text-sm font-semibold">Certificados (Postest)</h3>
+                    <p id="kpi-cert" class="text-3xl font-bold text-green-600">0</p>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow border-l-4 border-yellow-400">
+                    <h3 class="text-gray-500 text-sm font-semibold">En Avance</h3>
+                    <p id="kpi-avance" class="text-3xl font-bold text-yellow-500">0</p>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow border-l-4 border-red-500">
+                    <h3 class="text-gray-500 text-sm font-semibold">Sin Avance</h3>
+                    <p id="kpi-noavance" class="text-3xl font-bold text-red-500">0</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="bg-white p-6 rounded-lg shadow-md col-span-1">
+                    <h2 class="text-lg font-bold text-gray-700 mb-4 text-center">Panorama General</h2>
+                    <canvas id="myChart"></canvas>
+                </div>
+
+                <div class="bg-white p-6 rounded-lg shadow-md col-span-2">
+                    <div class="flex border-b mb-4">
+                        <button onclick="showTab('cert')" id="tab-cert" class="tab-btn active px-4 py-2 text-gray-600 focus:outline-none">✅ Certificados</button>
+                        <button onclick="showTab('avance')" id="tab-avance" class="tab-btn px-4 py-2 text-gray-600 focus:outline-none">🟡 En Avance</button>
+                        <button onclick="showTab('noavance')" id="tab-noavance" class="tab-btn px-4 py-2 text-gray-600 focus:outline-none">🔴 Sin Avance</button>
+                    </div>
+
+                    <div id="content-cert" class="table-container block">
+                        <button onclick="downloadExcel(certificadosData, 'Certificados')" class="mb-3 bg-green-500 hover:bg-green-600 text-white font-bold py-1 px-3 rounded text-sm transition">📥 Descargar Excel</button>
+                        <table class="min-w-full text-sm text-left text-gray-500" id="table-cert"></table>
+                    </div>
+
+                    <div id="content-avance" class="table-container hidden">
+                        <button onclick="downloadExcel(avanceData, 'En_Avance')" class="mb-3 bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-1 px-3 rounded text-sm transition">📥 Descargar Excel</button>
+                        <table class="min-w-full text-sm text-left text-gray-500" id="table-avance"></table>
+                    </div>
+
+                    <div id="content-noavance" class="table-container hidden">
+                        <button onclick="downloadExcel(noAvanceData, 'Sin_Avance')" class="mb-3 bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-3 rounded text-sm transition">📥 Descargar Excel</button>
+                        <table class="min-w-full text-sm text-left text-gray-500" id="table-noavance"></table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let certificadosData = [], avanceData = [], noAvanceData = [];
+        let chartInstance = null;
+
+        document.getElementById('fileUpload').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const firstSheet = workbook.SheetNames[0];
+                const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], {defval: ""});
+                
+                procesarDatos(jsonData);
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        function procesarDatos(data) {
+            certificadosData = []; avanceData = []; noAvanceData = [];
+            if(data.length === 0) return alert("El archivo está vacío.");
+
+            const headers = Object.keys(data[0]);
+            
+            // Asumimos que las dos primeras columnas son Nombre/Correo y el resto actividades
+            const idCols = headers.slice(0, 2); 
+            const activityCols = headers.slice(2).filter(h => !h.toLowerCase().includes('unnamed')); 
+            
+            // Buscar si hay una columna explícita de "certificado" o tomar la última actividad
+            const certCol = activityCols.find(h => h.toLowerCase().includes('certificad')) || activityCols[activityCols.length - 1];
+
+            data.forEach(row => {
+                let isStarted = false;
+                let isCertified = false;
+
+                // Revisar cada columna de actividad
+                activityCols.forEach(col => {
+                    let val = String(row[col]).trim();
+                    // Lógica: Si tiene algo escrito y no dice "No finalizado" ni "-".
+                    if (val && val !== "No finalizado" && val !== "-" && val !== "") {
+                        isStarted = true;
+                        if (col === certCol) isCertified = true; 
+                    }
+                });
+
+                // Clasificación
+                if (isCertified) {
+                    certificadosData.push(row);
+                } else if (isStarted) {
+                    avanceData.push(row);
+                } else {
+                    noAvanceData.push(row);
+                }
+            });
+
+            actualizarDashboard();
+        }
+
+        function actualizarDashboard() {
+            document.getElementById('dashboard').classList.remove('hidden');
+
+            // Actualizar KPIs
+            const total = certificadosData.length + avanceData.length + noAvanceData.length;
+            document.getElementById('kpi-total').innerText = total;
+            document.getElementById('kpi-cert').innerText = certificadosData.length;
+            document.getElementById('kpi-avance').innerText = avanceData.length;
+            document.getElementById('kpi-noavance').innerText = noAvanceData.length;
+
+            // Actualizar Gráfico
+            if(chartInstance) chartInstance.destroy();
+            const ctx = document.getElementById('myChart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Certificados', 'En Avance', 'Sin Avance'],
+                    datasets: [{
+                        data: [certificadosData.length, avanceData.length, noAvanceData.length],
+                        backgroundColor: ['#22c55e', '#eab308', '#ef4444'],
+                        borderWidth: 0
+                    }]
+                },
+                options: { responsive: true, cutout: '60%' }
+            });
+
+            // Generar Tablas (Mostrando solo las dos primeras columnas por limpieza visual)
+            generarTablaHtml('table-cert', certificadosData);
+            generarTablaHtml('table-avance', avanceData);
+            generarTablaHtml('table-noavance', noAvanceData);
+        }
+
+        function generarTablaHtml(tableId, dataArray) {
+            const table = document.getElementById(tableId);
+            table.innerHTML = "";
+            if(dataArray.length === 0) {
+                table.innerHTML = "<tr><td class='py-4 text-center'>No hay registros en esta categoría.</td></tr>";
+                return;
+            }
+
+            const headers = Object.keys(dataArray[0]).slice(0, 2); // Solo Nombre y Correo para la previsualización
+            
+            let thead = "<thead class='text-xs text-gray-700 uppercase bg-gray-50'><tr>";
+            headers.forEach(h => thead += `<th class='px-6 py-3'>${h}</th>`);
+            thead += "</tr></thead><tbody>";
+
+            let tbody = "";
+            dataArray.forEach(row => {
+                tbody += "<tr class='bg-white border-b hover:bg-gray-50'>";
+                headers.forEach(h => tbody += `<td class='px-6 py-4'>${row[h] || '-'}</td>`);
+                tbody += "</tr>";
+            });
+
+            table.innerHTML = thead + tbody + "</tbody>";
+        }
+
+        function showTab(tabName) {
+            ['cert', 'avance', 'noavance'].forEach(t => {
+                document.getElementById('tab-' + t).classList.remove('active');
+                document.getElementById('content-' + t).classList.replace('block', 'hidden');
+            });
+            document.getElementById('tab-' + tabName).classList.add('active');
+            document.getElementById('content-' + tabName).classList.replace('hidden', 'block');
+        }
+
+        function downloadExcel(dataArray, filename) {
+            if(dataArray.length === 0) return alert("No hay datos para descargar.");
+            const worksheet = XLSX.utils.json_to_sheet(dataArray);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Reporte");
+            XLSX.writeFile(workbook, `${filename}_Moodle.xlsx`);
+        }
+    </script>
+</body>
+</html>
